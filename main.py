@@ -113,12 +113,18 @@ def remove_borders(img, top=10, bottom=10, left=10, right=10):
 
 def main():
     # Lista de imágenes de Prokudin-Gorskii
+    # images = [
+    #     "./dataset/casa.jpg",
+    #     "./dataset/mansion.jpg",
+    #     "./dataset/cuadro.jpg",
+    #     "./dataset/cruz.jpg",
+    #     "./dataset/paisage.jpg",
+    # ]
     images = [
-        "./dataset/casa.jpg",
-        "./dataset/mansion.jpg",
-        "./dataset/cuadro.jpg",
-        "./dataset/cruz.jpg",
-        "./dataset/paisage.jpg",
+        "./prueba/00877v.jpg",
+        "./prueba/00974r.jpg",
+        "./prueba/00893r.jpg",
+        "./prueba/01043v.jpg",
     ]
 
     for img_file in images:
