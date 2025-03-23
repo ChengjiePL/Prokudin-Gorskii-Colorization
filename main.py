@@ -3,116 +3,126 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 
-
 def load_prokudin_image(filename):
-    """
-    Carga la placa de Prokudin-Gorskii (en escala de grises)
-    y devuelve 3 subimágenes: B, G, R.
-    """
+    """Carga y divide la imagen en 3 canales con manejo de residuos"""
     img = cv2.imread(filename, cv2.IMREAD_GRAYSCALE)
-    h = img.shape[0] // 3  # se asume que la imagen es 3x la altura de un canal
+    if img is None:
+        raise ValueError(f"No se pudo cargar la imagen: {filename}")
+    
+    h = img.shape[0] // 3
+    total_height = 3 * h
+    img = img[:total_height, :]  # Recortar residuo
+    return img[:h, :], img[h:2*h, :], img[2*h:3*h, :]
 
-    # Extraer subimágenes
-    B = img[0:h, :]
-    G = img[h : 2 * h, :]
-    R = img[2 * h : 3 * h, :]
-
-    return B, G, R
-
-
-def align_using_correlation(ref, target, search_range=15):
-    """
-    Alinea 'target' respecto a 'ref' buscando el desplazamiento
-    que maximiza la correlación. search_range define el rango de pixeles a desplazar.
-    Devuelve la imagen alineada y el desplazamiento (dx, dy).
-    """
-    best_score = -1e9
+def align_using_ncc(ref, target, search_range=15):
+    """Alineación usando Correlación Cruzada Normalizada"""
+    best_score = -np.inf
     best_dx, best_dy = 0, 0
+    
+    # Normalización
+    ref_norm = (ref - np.mean(ref)) / (np.std(ref) + 1e-8)
+    target_norm = (target - np.mean(target)) / (np.std(target) + 1e-8)
 
-    for dx in range(-search_range, search_range + 1):
-        for dy in range(-search_range, search_range + 1):
-            # Desplazar target
-            shifted = np.roll(target, shift=dx, axis=0)
-            shifted = np.roll(shifted, shift=dy, axis=1)
-
-            # Calcular correlación (ej. suma de productos)
-            score = np.sum(ref * shifted)
+    for dx in range(-search_range, search_range+1):
+        for dy in range(-search_range, search_range+1):
+            shifted = np.roll(target_norm, (dx, dy), (0, 1))
+            score = np.sum(ref_norm * shifted)
             if score > best_score:
                 best_score = score
                 best_dx, best_dy = dx, dy
 
-    # Crear la imagen final con el mejor desplazamiento
-    aligned = np.roll(target, shift=best_dx, axis=0)
-    aligned = np.roll(aligned, shift=best_dy, axis=1)
-
+    aligned = np.roll(target, (best_dx, best_dy), (0, 1))
     return aligned, (best_dx, best_dy)
 
-
 def align_phase_correlation(ref, target):
-    # Convertir a float32
-    ref_f = np.float32(ref)
-    tgt_f = np.float32(target)
-    # OpenCV tiene la función cv2.phaseCorrelate en C++,
-    # en Python se puede usar np.fft.fft2 manualmente.
-    # ...
-    # Devuelve la imagen alineada y el desplazamiento
-    pass
+    """Alineación usando Correlación de Fase con OpenCV"""
+    # Aplicar ventana de Hann para reducir artefactos de bordes
+    hann = np.outer(np.hanning(ref.shape[0]), np.hanning(ref.shape[1]))
+    
+    ref_windowed = np.float32(ref) * hann
+    target_windowed = np.float32(target) * hann
+    
+    # Calcular desplazamiento
+    (dx, dy), _ = cv2.phaseCorrelate(ref_windowed, target_windowed)
+    return np.roll(target, (int(dy), int(dx)), (0, 1)), (int(dy), int(dx))
 
+def align_with_pyramid(ref, target, method='phase', levels=3):
+    """Alineación multiresolución usando pirámide de imágenes"""
+    current_ref = ref.copy()
+    current_target = target.copy()
+    total_dx, total_dy = 0, 0
 
-def colorize_prokudin(filename, method="correlation", search_range=15):
-    """
-    Crea una imagen a color a partir de la placa Prokudin-Gorskii
-    y la guarda como 'filename_color.jpg'.
-    method puede ser 'correlation' o 'phase'.
-    """
+    for level in range(levels, 0, -1):
+        scale = 1 / (2 ** (level-1))
+        if level < levels:
+            current_ref = cv2.resize(current_ref, None, fx=scale, fy=scale)
+            current_target = cv2.resize(current_target, None, fx=scale, fy=scale)
+
+        if method == 'phase':
+            aligned, (dx, dy) = align_phase_correlation(current_ref, current_target)
+        else:
+            aligned, (dx, dy) = align_using_ncc(current_ref, current_target, search_range=5)
+
+        total_dx += dx * (2 ** (level-1))
+        total_dy += dy * (2 ** (level-1))
+
+    return np.roll(target, (int(total_dy), int(total_dx)), (int(total_dy), int(total_dx)))
+
+def colorize_prokudin(filename, method='phase', remove_borders=True):
     start_time = time.time()
-
-    # 1) Cargar y recortar
+    
+    # 1. Cargar y dividir canales
     B, G, R = load_prokudin_image(filename)
+    
+    # 2. Alinear usando método seleccionado (G como referencia)
+    if method == 'ncc':
+        R_aligned, (dx_r, dy_r) = align_using_ncc(G, R)
+        B_aligned, (dx_b, dy_b) = align_using_ncc(G, B)
+    elif method == 'pyramid':
+        R_aligned, (dx_r, dy_r) = align_with_pyramid(G, R)
+        B_aligned, (dx_b, dy_b) = align_with_pyramid(G, B)
+    else:  # phase correlation por defecto
+        R_aligned, (dx_r, dy_r) = align_phase_correlation(G, R)
+        B_aligned, (dx_b, dy_b) = align_phase_correlation(G, B)
 
-    # 2) Alinear. Elegimos R como referencia
-    if method == "correlation":
-        G_aligned, (dx_g, dy_g) = align_using_correlation(R, G, search_range)
-        B_aligned, (dx_b, dy_b) = align_using_correlation(R, B, search_range)
-    else:
-        # Alinear con phase correlation (opcional)
-        G_aligned, (dx_g, dy_g) = align_phase_correlation(R, G)
-        B_aligned, (dx_b, dy_b) = align_phase_correlation(R, B)
+    # 3. Crear imagen color
+    color_img = cv2.merge([B_aligned, G, R_aligned])
+    
+    # 4. Recorte de bordes dinámico
+    if remove_borders:
+        def calculate_margin(*displacements):
+            return max(max(d for d in displacements), 0)
+        
+        top = calculate_margin(dy_b, dy_r)
+        bottom = calculate_margin(-dy_b, -dy_r)
+        left = calculate_margin(dx_b, dx_r)
+        right = calculate_margin(-dx_b, -dx_r)
+        
+        h, w = color_img.shape[:2]
+        color_img = color_img[top:h-bottom, left:w-right]
 
-    # 3) Fusionar canales (OpenCV usa BGR)
-    color_img = cv2.merge([B_aligned, G_aligned, R])
-
-    # 4) Guardar resultado
-    out_name = filename.replace(".jpg", "_color.jpg")
-    cv2.imwrite(out_name, color_img)
-
-    elapsed = time.time() - start_time
-    print(f"Procesado: {filename}")
-    print(f"Desplazamientos G: ({dx_g}, {dy_g}), B: ({dx_b}, {dy_b})")
-    print(f"Tiempo total: {elapsed:.2f} s")
-    print(f"Guardado en: {out_name}")
-
-    # Mostrar
-    plt.imshow(color_img, cmap="gray")  # BGR => si quieres color real, usa cvtColor
-    plt.title("Resultado Color")
-    plt.axis("off")
+    # 5. Guardar y mostrar resultados
+    output_path = filename.replace(".jpg", f"_color_{method}.jpg")
+    cv2.imwrite(output_path, color_img)
+    
+    plt.imshow(cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB))
+    plt.title(f"Resultado ({method})")
+    plt.axis('off')
     plt.show()
 
+    print(f"Procesado: {filename}")
+    print(f"Desplazamientos B: ({dx_b}, {dy_b}), R: ({dx_r}, {dy_r})")
+    print(f"Tiempo: {time.time()-start_time:.2f}s")
     return color_img
 
-
-def remove_borders(img, top=10, bottom=10, left=10, right=10):
-    h, w = img.shape[:2]
-    plt.imshow(img[top : h - bottom, left : w - right], cmap="gray")
-    plt.title("Imagen sin bordes")
-    plt.axis("off")
-    plt.show()
-
-    return img[top : h - bottom, left : w - right]
-
-
 def main():
-    # Lista de imágenes de Prokudin-Gorskii
+    images = [
+        "./prueba/00877v.jpg",
+        "./prueba/00974r.jpg",
+        "./prueba/00893r.jpg",
+        "./prueba/01043v.jpg"
+    ]
+
     # images = [
     #     "./dataset/casa.jpg",
     #     "./dataset/mansion.jpg",
@@ -120,17 +130,14 @@ def main():
     #     "./dataset/cruz.jpg",
     #     "./dataset/paisage.jpg",
     # ]
-    images = [
-        "./prueba/00877v.jpg",
-        "./prueba/00974r.jpg",
-        "./prueba/00893r.jpg",
-        "./prueba/01043v.jpg",
-    ]
 
-    for img_file in images:
-        color_img = colorize_prokudin(img_file, method="correlation", search_range=15)
-        remove_borders(color_img, top=10, bottom=10, left=10, right=10)
-
+    for img in images:
+        try:
+            # Probar diferentes métodos
+            colorize_prokudin(img, method='phase')
+            colorize_prokudin(img, method='pyramid')
+        except Exception as e:
+            print(f"Error procesando {img}: {str(e)}")
 
 if __name__ == "__main__":
     main()
