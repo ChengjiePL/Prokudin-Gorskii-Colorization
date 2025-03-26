@@ -66,14 +66,19 @@ def load_prokudin_image(filename):
     h, w = img.shape
     img = img[int(h * 0.01) : int(h - h * 0.02), int(w * 0.05) : int(w - w * 0.05)]
 
-    # Dividir en canales
-    h = (
-        img.shape[0] // 3
-    )  # cálculo dinámico de la altura de los canales, para manejar cualquier tipo de tamaño
-    B = img[0:h, :]
-    G = img[h : 2 * h, :]
-    R = img[2 * h : 3 * h, :]
+    h_total = img.shape[0]
+    h_per_channel = h_total // 3
+    remaining = h_total % 3
 
+    # Distribuir píxeles sobrantes entre canales
+
+    B = img[0 : h_per_channel + (1 if remaining >= 1 else 0), :]
+    G = img[
+        h_per_channel + (1 if remaining >= 1 else 0) : 2 * h_per_channel
+        + (1 if remaining >= 2 else 0),
+        :,
+    ]
+    R = img[2 * h_per_channel + (1 if remaining >= 2 else 0) :, :]
     return B, G, R
 
 
@@ -93,48 +98,50 @@ def align_using_ncc(ref, target, search_range=20):
 
     for dx in range(-search_range, search_range + 1):
         for dy in range(-search_range, search_range + 1):
-            shifted = np.roll(target, (dx, dy), axis=(0, 1))
+            shifted = apply_shift(target, dx, dy)
             current_ncc = ncc(ref, shifted)
             if current_ncc > max_score:
                 max_score = current_ncc
                 best_shift = (dx, dy)
 
-    aligned = np.roll(target, best_shift, axis=(0, 1))
+    aligned = apply_shift(target, best_shift[0], best_shift[1])
     return aligned, best_shift
 
 
+# ====================== 1) Correlación (basada en convolució en l’espai) ======================
 def align_corr_space(ref, target, search_range=15):
     """
     Alineamiento de imágenes usando correlación basada en convolución en el espacio.
     Se desplaza la imagen en un rango dado y se calcula la correlación con la referencia.
     """
-    best_score = -np.inf
-    best_dx, best_dy = 0, 0
-
     # Convertir a escala de grises si es necesario
-
     if len(ref.shape) == 3:
         ref = cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY)
         target = cv2.cvtColor(target, cv2.COLOR_BGR2GRAY)
-    # Suavizado ligero para reducir ruido
 
-    ref_blur = cv2.GaussianBlur(ref, (5, 5), 0)
-    target_blur = cv2.GaussianBlur(target, (5, 5), 0)
+    # Ajustar parámetros según resolución
+    ksize = max(3, int(min(ref.shape) * 0.01) // 2 * 2 + 1)
+    search_range = max(15, int(ref.shape[1] * 0.01))
 
-    # Búsqueda de la mejor alineación
+    # Suavizado adaptativo
+    ref_blur = cv2.GaussianBlur(ref, (ksize, ksize), 0)
+    target_blur = cv2.GaussianBlur(target, (ksize, ksize), 0)
 
-    for dy in range(-search_range, search_range + 1):
-        for dx in range(-search_range, search_range + 1):
-            shifted = np.roll(target_blur, (dy, dx), axis=(0, 1))  # Desplazar imagen
-            score = np.sum(ref_blur * shifted)  # Producto interno (correlación)
+    best_score = -np.inf
+    best_dx, best_dy = 0, 0
+
+    # Búsqueda priorizando eje Y (desplazamientos verticales comunes)
+    for dx in range(-search_range, search_range + 1):
+        for dy in range(-search_range, search_range + 1):
+            shifted = apply_shift(target_blur, dx, dy)  # dx: X, dy: Y
+            score = np.sum(ref_blur * shifted)
 
             if score > best_score:
                 best_score = score
                 best_dx, best_dy = dx, dy
+
     # Aplicar desplazamiento final
-
-    aligned = np.roll(target, (best_dy, best_dx), axis=(0, 1))
-
+    aligned = apply_shift(target, best_dx, best_dy)
     return aligned, (best_dx, best_dy)
 
 
@@ -172,7 +179,7 @@ def align_corr_fourier(ref, target):
     dy = int(peak_y if peak_y <= h // 2 else peak_y - h)
     dx = int(peak_x if peak_x <= w // 2 else peak_x - w)
 
-    aligned = np.roll(target, (dy, dx), axis=(0, 1))
+    aligned = apply_shift(target, dx, dy)
     return aligned, (dy, dx)
 
 
@@ -256,16 +263,15 @@ def colorize_prokudin(filename, method="ncc", search_range=20):
 
 def main():
     images = [
-        "./prueba/01044r.jpg",
         # "./prueba/00877v.jpg",
-        # "./prueba/00974r.jpg",
-        # "./prueba/00893r.jpg",
-        # "./prueba/01043v.jpg",
-        # "./dataset/casa.jpg",
-        # "./dataset/mansion.jpg",
-        # "./dataset/paisage.jpg",
-        # "./dataset/cuadro.jpg",
-        # "./dataset/cruz.jpg",
+        "./prueba/00974r.jpg",
+        "./prueba/00893r.jpg",
+        "./prueba/01043v.jpg",
+        "./dataset/casa.jpg",
+        "./dataset/mansion.jpg",
+        "./dataset/paisage.jpg",
+        "./dataset/cuadro.jpg",
+        "./dataset/cruz.jpg",
     ]
 
     methods = ["corr_space", "fourier", "phase", "ncc"]
