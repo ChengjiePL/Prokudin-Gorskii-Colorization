@@ -104,30 +104,38 @@ def align_using_ncc(ref, target, search_range=20):
 
 
 def align_corr_space(ref, target, search_range=15):
-    # Suavizado adaptativo (kernel variable según resolución)
-    ksize = max(3, int(min(ref.shape) * 0.01) // 2 * 2 + 1)  # Tamaño impar
-    ref_blur = cv2.GaussianBlur(ref, (ksize, ksize), 0)
-    target_blur = cv2.GaussianBlur(target, (ksize, ksize), 0)
-
+    """
+    Alineamiento de imágenes usando correlación basada en convolución en el espacio.
+    Se desplaza la imagen en un rango dado y se calcula la correlación con la referencia.
+    """
     best_score = -np.inf
     best_dx, best_dy = 0, 0
 
-    # Búsqueda priorizando desplazamientos verticales (más comunes en Prokudin-Gorskii)
-    for dy in range(-search_range, search_range + 1):  # Primero eje Y
+    # Convertir a escala de grises si es necesario
+
+    if len(ref.shape) == 3:
+        ref = cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY)
+        target = cv2.cvtColor(target, cv2.COLOR_BGR2GRAY)
+    # Suavizado ligero para reducir ruido
+
+    ref_blur = cv2.GaussianBlur(ref, (5, 5), 0)
+    target_blur = cv2.GaussianBlur(target, (5, 5), 0)
+
+    # Búsqueda de la mejor alineación
+
+    for dy in range(-search_range, search_range + 1):
         for dx in range(-search_range, search_range + 1):
-            shifted = apply_shift(target_blur, dx, dy)
-            score = cv2.matchTemplate(ref_blur, shifted, cv2.TM_CCOEFF_NORMED)[0][0]
+            shifted = np.roll(target_blur, (dy, dx), axis=(0, 1))  # Desplazar imagen
+            score = np.sum(ref_blur * shifted)  # Producto interno (correlación)
+
             if score > best_score:
                 best_score = score
                 best_dx, best_dy = dx, dy
+    # Aplicar desplazamiento final
 
-    # Umbral adaptativo basado en contenido
-    if best_score < 0.5 * np.max(
-        cv2.matchTemplate(ref_blur, ref_blur, cv2.TM_CCOEFF_NORMED)
-    ):
-        return apply_shift(target, 0, 0), (0, 0)
+    aligned = np.roll(target, (best_dy, best_dx), axis=(0, 1))
 
-    return apply_shift(target, best_dx, best_dy), (best_dx, best_dy)
+    return aligned, (best_dx, best_dy)
 
 
 # ====================== 2) Correlación en Fourier (producto directo) ======================
@@ -248,15 +256,16 @@ def colorize_prokudin(filename, method="ncc", search_range=20):
 
 def main():
     images = [
-        "./prueba/00877v.jpg",
-        "./prueba/00974r.jpg",
-        "./prueba/00893r.jpg",
-        "./prueba/01043v.jpg",
-        "./dataset/casa.jpg",
-        "./dataset/mansion.jpg",
-        "./dataset/paisage.jpg",
-        "./dataset/cuadro.jpg",
-        "./dataset/cruz.jpg",
+        "./prueba/01044r.jpg",
+        # "./prueba/00877v.jpg",
+        # "./prueba/00974r.jpg",
+        # "./prueba/00893r.jpg",
+        # "./prueba/01043v.jpg",
+        # "./dataset/casa.jpg",
+        # "./dataset/mansion.jpg",
+        # "./dataset/paisage.jpg",
+        # "./dataset/cuadro.jpg",
+        # "./dataset/cruz.jpg",
     ]
 
     methods = ["corr_space", "fourier", "phase", "ncc"]
